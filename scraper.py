@@ -146,7 +146,6 @@ def main():
     logging.info(f"Target jobs found after 1st filter: {len(target_jobs)}")
 
     url_detail = "https://jasoseol.com/employment/get.json"
-    url_question = "https://jasoseol.com/employment/employment_question.json"
 
     new_sent_count = 0
 
@@ -192,21 +191,7 @@ def main():
             if is_valid_role:
                 sub_id = sub.get("id")
                 field_name = sub.get("field", "Unknown Role")
-                
-                # Fetch questions
-                try:
-                    res_q = requests.post(url_question, json={"employment_id": sub_id})
-                    res_q.raise_for_status()
-                    q_data = res_q.json().get("employment_question", [])
-                    if not isinstance(q_data, list):
-                        q_data = []
-                    # Sort questions by number
-                    questions = sorted(q_data, key=lambda x: x.get("number", 0))
-                    q_texts = [q.get("question", "") for q in questions]
-                    
-                    valid_role_data.append({"field": field_name, "questions": q_texts})
-                except Exception as e:
-                    logging.error(f"Failed to fetch questions for sub_id {sub_id}: {e}")
+                valid_role_data.append({"field": field_name})
         
         if valid_role_data:
             # 5. Format to Telegram message and send
@@ -225,11 +210,6 @@ def main():
             for role in valid_role_data:
                 escaped_field = html.escape(role['field'])
                 msg += f"\n🎯 <b>{escaped_field}</b>\n"
-                if not role['questions']:
-                    msg += "- 문항 없음 혹은 등록 전\n"
-                for i, q in enumerate(role['questions'], 1):
-                    escaped_q = html.escape(q)
-                    msg += f" {i}. {escaped_q}\n"
                     
             if send_telegram_message(msg):
                 sent_ids.add(str(job_id))
