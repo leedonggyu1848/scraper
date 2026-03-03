@@ -1,0 +1,32 @@
+name: Telegram Job Scraper
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # 09:00 AM KST
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  scrape-and-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Scraper Container
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          make run
+
+      - name: Commit sent_ids.txt Back
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add sent_ids.txt
+          git diff --staged --quiet || (git commit -m "chore: update sent_ids.txt [skip ci]" && git push)
