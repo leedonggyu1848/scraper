@@ -2,6 +2,8 @@ import os
 import re
 import logging
 import requests
+import time
+import html
 from datetime import datetime, timedelta
 
 # Configuring logger
@@ -24,6 +26,21 @@ def save_sent_ids(sent_ids):
         for jid in sent_ids:
             f.write(f"{jid}\n")
 
+def chunk_message(text, max_len=4000):
+    """Splits a long message into safe chunks preserving lines."""
+    lines = text.split('\n')
+    chunks = []
+    current_chunk = ""
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 > max_len:
+            chunks.append(current_chunk)
+            current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
+    if current_chunk:
+        chunks.append(current_chunk)
+    return chunks
+
 def send_telegram_message(text):
     """Send HTML-formatted text message to Telegram channel/user."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -31,23 +48,45 @@ def send_telegram_message(text):
         return False
         
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": False
-    }
     
-    try:
-        response = requests.post(url, json=payload)
-        response.raise_for_status()
-        return True
-    except requests.exceptions.HTTPError as e:
-        status = e.response.status_code
-        logging.error(f"Telegram API HTTP error {status}: {e.response.text}")
-    except Exception as e:
-        logging.error(f"Failed to send telegram message: {e}")
-    return False
+    chunks = chunk_message(text)
+    overall_success = True
+    
+    for chunk in chunks:
+        payload = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": chunk,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False
+        }
+        
+        chunk_success = False
+        for attempt in range(3):
+            try:
+                response = requests.post(url, json=payload)
+                response.raise_for_status()
+                chunk_success = True
+                break
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code
+                if status == 429:
+                    try:
+                        retry_after = e.response.json().get('parameters', {}).get('retry_after', 10)
+                    except Exception:
+                        retry_after = 10
+                    logging.warning(f"Telegram API rate limit. Retrying after {retry_after} seconds.")
+                    time.sleep(retry_after)
+                    continue
+                logging.error(f"Telegram API HTTP error {status}: {e.response.text}")
+                break
+            except Exception as e:
+                logging.error(f"Failed to send telegram message: {e}")
+                break
+        
+        if not chunk_success:
+            overall_success = False
+            
+    return overall_success
 
 def format_date(iso_str):
     """Convert ISO8601 offset strings to readable YYYY-MM-DD HH:MM."""
@@ -159,6 +198,8 @@ def main():
                     res_q = requests.post(url_question, json={"employment_id": sub_id})
                     res_q.raise_for_status()
                     q_data = res_q.json().get("employment_question", [])
+                    if not isinstance(q_data, list):
+                        q_data = []
                     # Sort questions by number
                     questions = sorted(q_data, key=lambda x: x.get("number", 0))
                     q_texts = [q.get("question", "") for q in questions]
@@ -169,7 +210,10 @@ def main():
         
         if valid_role_data:
             # 5. Format to Telegram message and send
-            msg = f"🏢 <b>{company_name} - {title}</b>\n"
+            escaped_company = html.escape(company_name)
+            escaped_title = html.escape(title)
+            
+            msg = f"🏢 <b>{escaped_company} - {escaped_title}</b>\n"
             msg += f"📅 접수기간: {start_t} ~ {end_t}\n"
             if img_url != "No Image Found":
                 msg += f"🔗 공고본문: <a href='{img_url}'>이미지 링크</a>\n\n"
@@ -179,11 +223,13 @@ def main():
             msg += "<b>[모집 직무 및 자소서 문항]</b>\n"
             
             for role in valid_role_data:
-                msg += f"\n🎯 <b>{role['field']}</b>\n"
+                escaped_field = html.escape(role['field'])
+                msg += f"\n🎯 <b>{escaped_field}</b>\n"
                 if not role['questions']:
                     msg += "- 문항 없음 혹은 등록 전\n"
                 for i, q in enumerate(role['questions'], 1):
-                    msg += f" {i}. {q}\n"
+                    escaped_q = html.escape(q)
+                    msg += f" {i}. {escaped_q}\n"
                     
             if send_telegram_message(msg):
                 sent_ids.add(str(job_id))
